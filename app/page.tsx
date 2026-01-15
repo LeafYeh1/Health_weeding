@@ -8,7 +8,7 @@ import Onboarding from '@/components/Onboarding';
 import BottomNav from '@/components/BottomNav';
 
 // --- 引入圖示 ---
-import { Utensils, Box as BoxIcon, Camera, Loader2, Sparkles, ShoppingBag, Lock } from 'lucide-react';
+import { Utensils, Box as BoxIcon, Camera, Loader2, Sparkles, ShoppingBag, Lock, Navigation, Footprints } from 'lucide-react';
 
 // --- 型別與設定定義 ---
 type FurnitureType = 'bear' | 'lamp' | 'cat' | 'tv' | 'plant';
@@ -54,54 +54,28 @@ function Grass() {
 }
 
 // --- 2. 玩家組件 (負責移動邏輯) ---
-// props 接收外部傳來的「總步數」
-function Player({ stepCount, modelUrl, scale = 1 }: { stepCount: number, modelUrl: string, scale?: number }) {
-  const { scene } = useGLTF(modelUrl); // duck model
-  
+// 修改後的 Player：接收真實的 rotation (方向) 和 position (位置)
+function Player({ position, rotationY, scale = 0.5, modelUrl }: { position: THREE.Vector3, rotationY: number, scale?: number, modelUrl: string }) {
+  const { scene } = useGLTF(modelUrl);
   const playerRef = useRef<THREE.Group>(null);
   
-  // 記錄「目標位置」：角色最終應該要走到的地方
-  const [targetPos, setTargetPos] = useState(new THREE.Vector3(0, 0, 0));
-  
-  // 記錄目前的旋轉角度 (雖然我們暫時沒做旋轉動畫，但邏輯上要有)
-  const rotationRef = useRef(0);
-
-  // 當「外部的步數」改變時，我們計算新的目標位置
-  useEffect(() => {
-    if (!playerRef.current) return;
-    
-    // 假設一步的距離是 0.5 單位
-    const stepDistance = 0.5;
-    
-    // 簡單算法：目前我們固定讓它往「隨機一點的方向」或「固定前方」走，
-    // 為了 Demo 效果，我們讓它固定往 Z 軸負向(螢幕內) 走一點點，帶一點隨機偏移
-    // 在正式版這裡會結合 GPS 座標
-    
-    const randomAngle = (Math.random() - 0.5) * 1; // 隨機左右偏一點
-    
-    const newX = targetPos.x + Math.sin(rotationRef.current + randomAngle) * stepDistance;
-    const newZ = targetPos.z - Math.cos(rotationRef.current + randomAngle) * stepDistance; // 往螢幕裡面走
-
-    setTargetPos(new THREE.Vector3(newX, 0, newZ));
-    
-    // 讓模型轉向新的目標方向 (LookAt)
-    playerRef.current.lookAt(newX, 0, newZ);
-
-  }, [stepCount]); // 只要 stepCount 一變，這裡就會執行
-
-  // 每一幀處理動畫：讓角色「滑」到目標位置
+  // 平滑移動與旋轉
   useFrame((state, delta) => {
     if (!playerRef.current) return;
-
-    // Lerp (Linear Interpolation) 平滑移動
-    // 意思：目前位置 = 目前位置 + (目標位置 - 目前位置) * 速度係數
-    playerRef.current.position.lerp(targetPos, delta * 5);
+    // 使用 Lerp 讓移動不卡頓
+    playerRef.current.position.lerp(position, delta * 2);
+    
+    // 平滑旋轉 (處理 360 度與 0 度交界問題)
+    let targetRot = rotationY;
+    const currentRot = playerRef.current.rotation.y;
+    // 簡單的角度最短路徑修正
+    if (targetRot - currentRot > Math.PI) targetRot -= Math.PI * 2;
+    if (targetRot - currentRot < -Math.PI) targetRot += Math.PI * 2;
+    
+    playerRef.current.rotation.y += (targetRot - currentRot) * delta * 5;
   });
 
-  // 當模型換了 (modelUrl 改變)，我们要複製一個新的場景，不然 React 會有緩存問題
-  const clonedScene = scene.clone();
-
-  return <primitive object={clonedScene} ref={playerRef} scale={scale} />;
+  return <primitive object={scene} ref={playerRef} scale={scale} />;
 }
 
 // --- 2D 小屋組件 (含拖曳邏輯) ---
@@ -197,8 +171,8 @@ function House2D({ items, updatePosition }: { items: PlacedFurniture[], updatePo
 // --- Home page ---
 export default function Home() {
   const [isRegistered, setIsRegistered] = useState(false);
-
   const [characterConfig, setCharacterConfig] = useState({ file: '/duck.glb', scale: 0.5 });
+
   // Record current page
   const [currentTab, setCurrentTab] = useState<'map' | 'house' | 'diet'>('map'); 
   
@@ -214,6 +188,19 @@ export default function Home() {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [aiResult, setAiResult] = useState<any>(null);
   
+  // 感測器狀態
+  const [isTracking, setIsTracking] = useState(false);
+  const [useGPS, setUseGPS] = useState(false); // false = 室內模式 (慣性導航), true = 戶外模式 (GPS)
+  
+  // 角色位置與方向
+  const [playerPos, setPlayerPos] = useState(new THREE.Vector3(0, 0, 0));
+  const [playerRot, setPlayerRot] = useState(0); // Y軸旋轉 (弧度)
+
+  // 內部變數 (不需要觸發重新渲染)
+  const lastStepTime = useRef(0);
+  const lastAcc = useRef({ x: 0, y: 0, z: 0 });
+  const startGPS = useRef<{ lat: number, lon: number } | null>(null);
+
   const handleRegistration = (data: any) => {
     // 找出使用者選的那隻角色的完整資料
     const selectedChar = CHARACTERS.find(c => c.id === data.character);
@@ -226,6 +213,96 @@ export default function Home() {
       });
     }
     setIsRegistered(true);
+  };
+
+  // --- 啟動感測器 (iOS 必須由使用者點擊觸發) ---
+  const startSensors = async () => {
+    // 1. 請求 iOS 動態感測器權限
+    if (typeof (DeviceMotionEvent as any).requestPermission === 'function') {
+      try {
+        const permissionState = await (DeviceMotionEvent as any).requestPermission();
+        if (permissionState !== 'granted') {
+          alert('需要動作與方向權限才能運作喔！');
+          return;
+        }
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
+    setIsTracking(true);
+
+    // 2. 監聽計步器 (加速度計)
+    window.addEventListener('devicemotion', handleMotion);
+    
+    // 3. 監聽方向 (電子羅盤)
+    window.addEventListener('deviceorientation', handleOrientation);
+
+    // 4. (選用) 監聽 GPS
+    if (useGPS) {
+        if (navigator.geolocation) {
+            navigator.geolocation.watchPosition(
+                (position) => {
+                    const { latitude, longitude } = position.coords;
+                    if (!startGPS.current) {
+                        startGPS.current = { lat: latitude, lon: longitude };
+                    }
+                    // 簡單的經緯度轉平面座標 (乘以係數放大移動感)
+                    const scale = 111000; // 粗略將度數轉公尺
+                    const x = (longitude - startGPS.current.lon) * scale * Math.cos(latitude * (Math.PI / 180));
+                    const z = -(latitude - startGPS.current.lat) * scale;
+                    setPlayerPos(new THREE.Vector3(x, 0, z));
+                },
+                (err) => console.error(err),
+                { enableHighAccuracy: true }
+            );
+        }
+    }
+  };
+
+  // --- 計步與慣性導航邏輯 (核心) ---
+  const handleMotion = (event: DeviceMotionEvent) => {
+    const acc = event.accelerationIncludingGravity;
+    if (!acc) return;
+
+    // 簡單的計步演算法：計算加速度向量長度變化
+    const dot = (acc.x || 0) * (acc.x || 0) + (acc.y || 0) * (acc.y || 0) + (acc.z || 0) * (acc.z || 0);
+    const length = Math.sqrt(dot);
+    
+    // 閾值 (數值越大越難觸發，防止抖動算步數)
+    const threshold = 11; 
+    const now = Date.now();
+
+    // 如果加速度超過閾值，且距離上一步超過 500ms (避免一步算兩次)
+    if (length > threshold && now - lastStepTime.current > 500) {
+      lastStepTime.current = now;
+      
+      // 1. 增加步數
+      setSteps(prev => prev + 1);
+
+      // 2. 如果是室內模式，用「步數 + 目前方向」來推算新位置
+      if (!useGPS) {
+         const stepSize = 1.0; // 遊戲中一步的距離
+         setPlayerPos(prev => {
+             // 根據目前的旋轉角度往前走
+             // 注意：3D 場景中 0度通常面向 +Z 或 -Z，這裡假設面向 -Z 為北方
+             // 需要根據你的模型初始方向調整 Math.sin/cos 的正負號
+             const newX = prev.x - Math.sin(playerRot) * stepSize; 
+             const newZ = prev.z - Math.cos(playerRot) * stepSize;
+             return new THREE.Vector3(newX, 0, newZ);
+         });
+      }
+    }
+  };
+
+  // --- 羅盤方向邏輯 ---
+  const handleOrientation = (event: DeviceOrientationEvent) => {
+    // alpha 是羅盤方向 (0-360)，0 是正北
+    if (event.alpha !== null) {
+      // 轉換成弧度
+      const radians = event.alpha * (Math.PI / 180);
+      setPlayerRot(radians);
+    }
   };
 
   // [功能] 購買並放置家具
@@ -299,8 +376,9 @@ export default function Home() {
                 <directionalLight position={[10, 20, 10]} intensity={1.5} castShadow />
                 <Grass />
                 <Player 
-                  stepCount={steps} 
-                  modelUrl={characterConfig.file} 
+                  position={playerPos}     // 傳入計算好的位置
+                  rotationY={playerRot}    // 傳入羅盤方向
+                  modelUrl={characterConfig.file} // 傳入角色模型路徑
                   scale={characterConfig.scale} 
                 />
                 <OrbitControls maxPolarAngle={Math.PI / 2.1} />
@@ -318,16 +396,59 @@ export default function Home() {
         {/* A. 地圖 UI */}
         {currentTab === 'map' && (
           <div className="absolute top-0 left-0 w-full h-full pointer-events-none z-10 flex flex-col p-6">
+            
+            {/* 頂部資訊列 */}
             <div className="bg-white/90 backdrop-blur-sm p-4 rounded-3xl shadow-sm flex justify-between items-center pointer-events-auto">
-               <span className="font-bold text-slate-700">今日步數</span>
-               <span className="text-2xl font-black text-indigo-600">{steps.toLocaleString()}</span>
+               <div>
+                   <div className="text-xs text-slate-500 font-bold">MODE</div>
+                   <div className="text-xs font-bold text-green-600 flex items-center gap-1">
+                       {useGPS ? <Navigation size={12}/> : <Footprints size={12}/>}
+                       {useGPS ? '戶外 GPS' : '室內慣性'}
+                   </div>
+               </div>
+               <div className="text-right">
+                   <div className="text-xs text-slate-500">今日步數</div>
+                   <span className="text-2xl font-black text-indigo-600">{steps.toLocaleString()}</span>
+               </div>
             </div>
-            <div className="mt-4 bg-emerald-400 p-4 rounded-3xl shadow-lg pointer-events-auto text-center text-white">
-              <h3 className="font-bold mb-2">🌲 森林模式</h3>
-              <button onClick={() => setSteps(s => s + 500)} className="bg-slate-800/20 w-full py-2 rounded-xl backdrop-blur-sm hover:bg-slate-800/40">
-                 偷懶走 500 步 (Demo用)
-              </button>
-            </div>
+
+            {/* 啟動按鈕 (如果還沒開始追蹤) */}
+            {!isTracking ? (
+                <div className="absolute inset-0 flex items-center justify-center bg-black/20 pointer-events-auto backdrop-blur-sm z-50">
+                    <div className="bg-white p-6 rounded-3xl shadow-2xl text-center max-w-xs mx-4">
+                        <Navigation size={48} className="mx-auto text-indigo-500 mb-4" />
+                        <h3 className="text-xl font-bold mb-2">準備好出發了嗎？</h3>
+                        <p className="text-slate-500 mb-6 text-sm">我們需要存取您的動作感測器與位置，才能讓角色跟著你移動。</p>
+                        
+                        <div className="flex gap-2 justify-center mb-4">
+                            <button 
+                                onClick={() => { setUseGPS(false); setTimeout(startSensors, 100); }}
+                                className="flex-1 bg-indigo-600 text-white py-3 px-4 rounded-xl font-bold text-sm hover:bg-indigo-700"
+                            >
+                                室內模式
+                                <span className="block text-[10px] font-normal opacity-80">(Demo推薦)</span>
+                            </button>
+                            <button 
+                                onClick={() => { setUseGPS(true); setTimeout(startSensors, 100); }}
+                                className="flex-1 bg-slate-200 text-slate-700 py-3 px-4 rounded-xl font-bold text-sm hover:bg-slate-300"
+                            >
+                                戶外 GPS
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            ) : (
+                // 已啟動狀態下的控制項
+                <div className="mt-4 pointer-events-auto">
+                    {/* 除錯資訊 (可以之後隱藏) */}
+                    <div className="bg-black/50 text-white p-2 rounded-xl text-[10px] font-mono">
+                        X: {playerPos.x.toFixed(2)} <br/>
+                        Z: {playerPos.z.toFixed(2)} <br/>
+                        Rot: {(playerRot * 180 / Math.PI).toFixed(0)}°
+                    </div>
+                </div>
+            )}
+            
           </div>
         )}
 
@@ -337,7 +458,7 @@ export default function Home() {
              <div className="bg-white/90 backdrop-blur-md p-4 rounded-3xl shadow-xl">
                 <div className="flex justify-between items-center mb-3">
                   <h3 className="font-bold text-slate-700 flex items-center gap-2">
-                    <ShoppingBag size={20} /> 家具商店
+                    <ShoppingBag size={20} /> 商店
                   </h3>
                   <div className="bg-indigo-100 text-indigo-700 px-3 py-1 rounded-full text-xs font-bold">
                      錢包: {steps} 步
