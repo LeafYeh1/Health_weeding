@@ -35,6 +35,7 @@ const CHARACTERS = [
   { id: 'robot', name: '科技機器人', file: '/robot.glb', img: '🤖', scale: 2 },
 ];
 
+
 // --- 1. 草地組件 (負責地板的視覺) ---
 function Grass() {
 
@@ -200,7 +201,9 @@ export default function Home() {
   const lastStepTime = useRef(0);
   const lastAcc = useRef({ x: 0, y: 0, z: 0 });
   const startGPS = useRef<{ lat: number, lon: number } | null>(null);
+  const [userHealth, setUserHealth] = useState<{ height: number; weight: number; bmi: number } | null>(null);
 
+  // --- 處理註冊完成 ---
   const handleRegistration = (data: any) => {
     // 找出使用者選的那隻角色的完整資料
     const selectedChar = CHARACTERS.find(c => c.id === data.character);
@@ -212,6 +215,17 @@ export default function Home() {
         scale: selectedChar.scale 
       });
     }
+    // 計算 BMI
+    const heightInMeters = data.height / 100; 
+    const bmi = data.weight / (heightInMeters * heightInMeters);
+
+    // 儲存使用者健康資料
+    setUserHealth({
+      height: data.height,
+      weight: data.weight,
+      bmi: parseFloat(bmi.toFixed(2)), // 保留兩位小數
+    });
+
     setIsRegistered(true);
   };
 
@@ -337,18 +351,23 @@ export default function Home() {
 
   // AI 圖片分析 (保持不變)
   const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    setIsAnalyzing(true);
-    setAiResult(null);
-    const reader = new FileReader();
+  const file = e.target.files?.[0];
+  if (!file || !userHealth) return; // 确保用户健康数据存在
+
+  setIsAnalyzing(true);
+  setAiResult(null);
+
+  const reader = new FileReader();
     reader.onloadend = async () => {
       const base64String = reader.result as string;
       try {
         const res = await fetch('/api/analyze', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ image: base64String }),
+          body: JSON.stringify({
+            image: base64String,
+            healthData: userHealth, // 传递用户健康数据
+          }),
         });
         const data = await res.json();
         setAiResult(data);
@@ -499,46 +518,64 @@ export default function Home() {
         {currentTab === 'diet' && (
           <div className="absolute inset-0 z-20 bg-slate-50 flex flex-col overflow-y-auto">
             <div className="p-6">
-               <h2 className="text-2xl font-bold text-slate-800 mb-1">AI 飲食顧問</h2>
-               <p className="text-slate-500 mb-6">拍下你的食物，換取獎勵！</p>
-               <label className="block w-full aspect-video bg-white border-2 border-dashed border-slate-300 rounded-3xl flex flex-col items-center justify-center cursor-pointer hover:border-green-400 hover:bg-green-50 transition gap-3 relative overflow-hidden group">
-                  <input type="file" accept="image/*" className="hidden" onChange={handleImageUpload} />
-                  {isAnalyzing ? (
-                    <div className="flex flex-col items-center animate-pulse text-green-600">
-                      <Loader2 className="animate-spin mb-2" size={32} />
-                      <span>Gemini 正在思考...</span>
+              <h2 className="text-2xl font-bold text-slate-800 mb-1">AI 飲食顧問</h2>
+              <p className="text-slate-500 mb-6">拍下你的食物，換取獎勵！</p>
+
+              {/* 健康数据卡片 */}
+              {userHealth && (
+                <div className="mb-6 p-4 bg-gradient-to-r from-green-100 to-blue-100 border border-blue-200 rounded-xl text-blue-800 shadow-md flex items-center gap-4">
+                  <div className="flex items-center justify-center w-12 h-12 bg-blue-200 text-white rounded-full text-xl font-bold">
+                    🩺
+                  </div>
+                  <div>
+                    <p className="text-sm font-medium">身高: <span className="font-bold">{userHealth.height} cm</span></p>
+                    <p className="text-sm font-medium">體重: <span className="font-bold">{userHealth.weight} kg</span></p>
+                    <p className="text-sm font-medium">BMI: <span className="font-bold">{userHealth.bmi}</span></p>
+                  </div>
+                </div>
+              )}
+
+              {/* 上传区域 */}
+              <label className="block w-full aspect-video bg-gradient-to-br from-green-50 to-green-100 border-2 border-dashed border-green-300 rounded-3xl flex flex-col items-center justify-center cursor-pointer hover:border-green-400 hover:shadow-lg transition gap-3 relative overflow-hidden group">
+                <input type="file" accept="image/*" className="hidden" onChange={handleImageUpload} />
+                {isAnalyzing ? (
+                  <div className="flex flex-col items-center animate-pulse text-green-600">
+                    <Loader2 className="animate-spin mb-2" size={32} />
+                    <span>Gemini 正在思考...</span>
+                  </div>
+                ) : (
+                  <>
+                    <div className="w-16 h-16 bg-green-200 rounded-full flex items-center justify-center text-green-600 group-hover:scale-110 transition">
+                      <Camera size={32} />
                     </div>
-                  ) : (
-                    <>
-                      <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center text-green-600 group-hover:scale-110 transition">
-                        <Camera size={32} />
-                      </div>
-                      <span className="text-slate-400 font-medium">點擊拍照或上傳</span>
-                    </>
-                  )}
-               </label>
-               {aiResult && (
-                 <div className="mt-6 bg-white rounded-3xl p-6 shadow-xl border border-slate-100 animate-in slide-in-from-bottom-5">
-                    <div className="flex justify-between items-start mb-4">
-                      <div>
-                        <h3 className="text-xl font-bold text-slate-800">{aiResult.foodName}</h3>
-                        <div className="flex items-center gap-1 text-green-600 text-sm font-bold">
-                          <Sparkles size={14} />
-                          健康評分: {aiResult.healthScore}/10
-                        </div>
-                      </div>
-                      <div className="bg-orange-100 text-orange-600 px-3 py-1 rounded-full font-bold text-sm">
-                        {aiResult.calories} kcal
+                    <span className="text-slate-400 font-medium">點擊拍照或上傳評估</span>
+                  </>
+                )}
+              </label>
+
+              {/* AI 分析结果 */}
+              {aiResult && (
+                <div className="mt-6 bg-white rounded-3xl p-6 shadow-xl border border-slate-100 animate-in slide-in-from-bottom-5">
+                  <div className="flex justify-between items-start mb-4">
+                    <div>
+                      <h3 className="text-xl font-bold text-slate-800">{aiResult.foodName}</h3>
+                      <div className="flex items-center gap-1 text-green-600 text-sm font-bold">
+                        <Sparkles size={14} />
+                        健康評分: {aiResult.healthScore}/10
                       </div>
                     </div>
-                    <p className="text-slate-600 leading-relaxed bg-slate-50 p-3 rounded-xl mb-4 text-sm">
-                      {aiResult.comment}
-                    </p>
-                    <button onClick={() => setAiResult(null)} className="w-full bg-slate-900 text-white font-bold py-3 rounded-xl shadow hover:bg-slate-800 active:scale-95 transition">
-                      收下獎勵 ({aiResult.rewardCoins} 步)
-                    </button>
-                 </div>
-               )}
+                    <div className="bg-orange-100 text-orange-600 px-3 py-1 rounded-full font-bold text-sm">
+                      {aiResult.calories} kcal
+                    </div>
+                  </div>
+                  <p className="text-slate-600 leading-relaxed bg-slate-50 p-3 rounded-xl mb-4 text-sm">
+                    {aiResult.comment}
+                  </p>
+                  <button onClick={() => setAiResult(null)} className="w-full bg-green-600 text-white font-bold py-3 rounded-xl shadow hover:bg-green-500 active:scale-95 transition">
+                    收下獎勵 ({aiResult.rewardCoins} 步)
+                  </button>
+                </div>
+              )}
             </div>
           </div>
         )}
