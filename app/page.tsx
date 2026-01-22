@@ -6,6 +6,7 @@ import { useRef, useState, useEffect } from 'react';
 import * as THREE from 'three';
 import Onboarding from '@/components/Onboarding';
 import BottomNav from '@/components/BottomNav';
+import GrassField from '@/components/GrassField';
 
 // --- 引入圖示 ---
 import { Utensils, Box as BoxIcon, Camera, Loader2, Sparkles, ShoppingBag, Lock, Navigation, Footprints } from 'lucide-react';
@@ -49,7 +50,10 @@ function Grass() {
   return (
     <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.5, 0]}>
       <planeGeometry args={[1000, 1000]} /> {/* 超大平原 */}
-      <meshStandardMaterial map={texture} color="#90EE90" /> {/* 疊加一點綠色讓它更鮮豔 */}
+      <meshPhongMaterial
+        color="#6EDC82"      // 卡通綠色
+        shininess={30}       // 高光讓它像遊戲感
+      />
     </mesh>
   );
 }
@@ -388,19 +392,19 @@ export default function Home() {
         {!isRegistered && <Onboarding onComplete={handleRegistration} />}
 
         {/* === 背景層 === */}
-        <div className="absolute inset-0 z-0 bg-sky-200">
+        <div className="absolute inset-0 z-0" style={{ background: 'linear-gradient(to top, #90EE90, #a0f0ff)' }}>
           {currentTab === 'map' && (
-             <Canvas shadows camera={{ position: [0, 5, 10], fov: 60 }}>
+             <Canvas shadows camera={{ position: [0, 15, 15], fov: 60, up: [0,1,0] }}>
                 <ambientLight intensity={0.7} />
                 <directionalLight position={[10, 20, 10]} intensity={1.5} castShadow />
-                <Grass />
+                <GrassField playerPos={playerPos}/>
                 <Player 
                   position={playerPos}     // 傳入計算好的位置
                   rotationY={playerRot}    // 傳入羅盤方向
                   modelUrl={characterConfig.file} // 傳入角色模型路徑
                   scale={characterConfig.scale} 
                 />
-                <OrbitControls maxPolarAngle={Math.PI / 2.1} />
+                <OrbitControls maxPolarAngle={Math.PI / 2.1} />  
              </Canvas>
           )}
 
@@ -417,7 +421,7 @@ export default function Home() {
           <div className="absolute top-0 left-0 w-full h-full pointer-events-none z-10 flex flex-col p-6">
             
             {/* 頂部資訊列 */}
-            <div className="bg-white/90 backdrop-blur-sm p-4 rounded-3xl shadow-sm flex justify-between items-center pointer-events-auto">
+            <div className="game-card flex justify-between items-center pointer-events-auto">
                <div>
                    <div className="text-xs text-slate-500 font-bold">MODE</div>
                    <div className="text-xs font-bold text-green-600 flex items-center gap-1">
@@ -429,6 +433,56 @@ export default function Home() {
                    <div className="text-xs text-slate-500">今日步數</div>
                    <span className="text-2xl font-black text-indigo-600">{steps.toLocaleString()}</span>
                </div>
+            </div>
+
+            {/* 2. 最終完美版：加大標題，極致壓縮行距 */}
+            <div className="pointer-events-auto animate-in fade-in slide-in-from-left-4 duration-1000">
+              <div className="bg-white/30 backdrop-blur-md border border-white/30 rounded-3xl p-5 shadow-xl text-slate-800 w-full max-w-[260px]">
+                
+                {/* 熱量標題與數值 */}
+                <div className="flex justify-between items-center mb-2">
+                  <div className="flex items-center gap-2">
+                    <div className="w-1 h-4 bg-indigo-500 rounded-full" />
+                    <h2 className="text-[16px] font-black tracking-widest text-slate-700 uppercase">熱量消耗</h2>
+                  </div>
+                  <span className="text-sm font-mono font-bold text-indigo-600">850 / 2200 <small className="opacity-60 text-[10px]">kcal</small></span>
+                </div>
+
+                {/* 進度條 */}
+                <div className="w-full bg-slate-200/40 h-1.5 rounded-full overflow-hidden mb-5">
+                  <div 
+                    className="bg-gradient-to-r from-indigo-500 to-emerald-400 h-full transition-all duration-1000" 
+                    style={{ width: '38.6%' }}
+                  />
+                </div>
+
+                {/* 三餐建議區塊 */}
+                <div className="space-y-1.5">
+                  {/* 加大的標題：text-xs (12px) 且加粗 */}
+                  <div className="text-base font-black text-indigo-500 mb-2 flex items-center gap-1.5 uppercase tracking-widest">
+                    <Utensils size={13} /> 三餐建議
+                  </div>
+                  
+                  {/* 極致壓縮的行距：gap-1.5 */}
+                  <div className="flex flex-col gap-1.5 text-[13px] text-slate-700 font-medium">
+                    <div className="flex items-center gap-2">
+                      <span className="text-indigo-400 font-bold w-4">早</span>
+                      <span className="flex-1 opacity-90">全麥吐司 + 水煮蛋</span>
+                    </div>
+                    
+                    {/* 縮小分隔線的間距：pt-1.5 */}
+                    <div className="flex items-center gap-2 border-t border-white/10 pt-1.5">
+                      <span className="text-indigo-400 font-bold w-4">中</span>
+                      <span className="flex-1 opacity-90">雞胸肉沙拉 + 糙米飯</span>
+                    </div>
+                    
+                    <div className="flex items-center gap-2 border-t border-white/10 pt-1.5">
+                      <span className="text-indigo-400 font-bold w-4">晚</span>
+                      <span className="flex-1 opacity-90">清蒸魚 + 大量時蔬</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
             </div>
 
             {/* 啟動按鈕 (如果還沒開始追蹤) */}
@@ -459,12 +513,12 @@ export default function Home() {
             ) : (
                 // 已啟動狀態下的控制項
                 <div className="mt-4 pointer-events-auto">
-                    {/* 除錯資訊 (可以之後隱藏) */}
+                    {/* 除錯資訊 (可以之後隱藏) 
                     <div className="bg-black/50 text-white p-2 rounded-xl text-[10px] font-mono">
                         X: {playerPos.x.toFixed(2)} <br/>
                         Z: {playerPos.z.toFixed(2)} <br/>
                         Rot: {(playerRot * 180 / Math.PI).toFixed(0)}°
-                    </div>
+                    </div>*/}
                 </div>
             )}
             
