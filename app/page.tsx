@@ -229,7 +229,13 @@ export default function Home() {
       weight: data.weight,
       bmi: parseFloat(bmi.toFixed(2)), // 保留兩位小數
     });
-
+    
+    // 檢查 BMI 是否超標
+    if (bmi >= 25) {
+      alert(
+        `您的 BMI 為 ${bmi.toFixed(2)}，屬於超標範圍。\n這可能是危險狀態，建議您先行就醫或諮詢專業醫師。`
+      );
+    }
     setIsRegistered(true);
   };
 
